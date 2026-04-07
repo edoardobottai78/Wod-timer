@@ -478,6 +478,7 @@
   <div class="controls">
     <button class="btn btn-primary" id="btnStart" onclick="startTimer()">START</button>
     <button class="btn btn-secondary" id="btnPause" onclick="pauseTimer()" disabled>PAUSA</button>
+    <button class="btn btn-danger" id="btnFinish" onclick="finishForTime()" style="display:none">FINISH</button>
     <button class="btn btn-secondary" id="btnReset" onclick="resetTimer()">RESET</button>
   </div>
 
@@ -829,6 +830,7 @@ function startTimer() {
     document.getElementById('btnStart').disabled = true;
     document.getElementById('btnPause').disabled = false;
     document.getElementById('saveRow').style.display = 'none';
+    document.getElementById('btnFinish').style.display = state.wodType === 'fortime' ? '' : 'none';
     state.interval = setInterval(tick, 1000);
     updateDisplay();
   });
@@ -856,6 +858,7 @@ function resetTimer() {
   document.getElementById('btnStart').disabled = false;
   document.getElementById('btnStart').textContent = 'START';
   document.getElementById('btnPause').disabled = true;
+  document.getElementById('btnFinish').style.display = 'none';
   document.getElementById('timerClock').textContent = '00:00';
   document.getElementById('timerClock').className = 'timer-clock';
   document.getElementById('timerPhase').textContent = 'CONFIGURA UN WOD E PREMI START';
@@ -933,6 +936,7 @@ function finish() {
   state.finishAnnounced = true;
   document.getElementById('btnStart').disabled = true;
   document.getElementById('btnPause').disabled = true;
+  document.getElementById('btnFinish').style.display = 'none';
   document.getElementById('timerPhase').textContent = 'TEMPO SCADUTO!';
   document.getElementById('timerClock').textContent = '00:00';
   document.getElementById('timerClock').className = 'timer-clock danger';
@@ -1015,6 +1019,27 @@ function renderRounds(current, total, phase) {
     chip.textContent = 'R' + i;
     el.appendChild(chip);
   }
+}
+
+// ==============================
+// FINISH FOR TIME (manual stop)
+// ==============================
+function finishForTime() {
+  if (!state.running && !state.paused) return;
+  clearInterval(state.interval);
+  state.running = false;
+  beepFinish();
+  speak('Ottimo lavoro!');
+  const elapsed = state.elapsed;
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('btnFinish').style.display = 'none';
+  document.getElementById('timerPhase').textContent = 'FOR TIME · COMPLETATO';
+  document.getElementById('timerClock').className = 'timer-clock';
+  document.getElementById('progressFill').className = 'progress-bar-fill';
+  // Precompile score with elapsed time
+  document.getElementById('saveScore').value = formatMMSS(elapsed);
+  document.getElementById('saveRow').style.display = 'flex';
 }
 
 // ==============================
