@@ -558,7 +558,9 @@ let state = {
   phaseElapsed: 0,
   customIntervals: [],
   customIdx: 0,
-  startTime: null,
+  startTime: null,       // Date.now() when timer actually started
+  pausedAt: null,        // Date.now() when paused
+  pausedElapsed: 0,      // total ms accumulated during pauses
   voiceEnabled: true,
   finishAnnounced: false,
 };
@@ -816,22 +818,29 @@ function buildTimer() {
 
 function startTimer() {
   if (state.paused) {
+    // Resuming: adjust startTime to account for paused duration
+    const pauseDuration = Date.now() - state.pausedAt;
+    state.pausedElapsed += pauseDuration;
+    state.pausedAt = null;
     state.paused = false;
     state.running = true;
     document.getElementById('btnStart').disabled = true;
     document.getElementById('btnPause').disabled = false;
-    state.interval = setInterval(tick, 1000);
+    state.interval = setInterval(tick, 250);
     return;
   }
   if (!buildTimer()) return;
   runCountdown(() => {
     state.running = true;
     state.paused = false;
+    state.startTime = Date.now();
+    state.pausedElapsed = 0;
+    state.pausedAt = null;
     document.getElementById('btnStart').disabled = true;
     document.getElementById('btnPause').disabled = false;
     document.getElementById('saveRow').style.display = 'none';
     document.getElementById('btnFinish').style.display = state.wodType === 'fortime' ? '' : 'none';
-    state.interval = setInterval(tick, 1000);
+    state.interval = setInterval(tick, 250);
     updateDisplay();
   });
 }
@@ -840,6 +849,7 @@ function pauseTimer() {
   if (!state.running) return;
   state.running = false;
   state.paused = true;
+  state.pausedAt = Date.now();
   clearInterval(state.interval);
   document.getElementById('btnStart').disabled = false;
   document.getElementById('btnStart').textContent = 'RIPRENDI';
@@ -855,6 +865,9 @@ function resetTimer() {
   state.phaseElapsed = 0;
   state.customIdx = 0;
   state.finishAnnounced = false;
+  state.startTime = null;
+  state.pausedAt = null;
+  state.pausedElapsed = 0;
   document.getElementById('btnStart').disabled = false;
   document.getElementById('btnStart').textContent = 'START';
   document.getElementById('btnPause').disabled = true;
@@ -870,59 +883,70 @@ function resetTimer() {
 }
 
 function tick() {
-  state.elapsed++;
-  state.phaseElapsed++;
+  if (!state.running) return;
+
+  // TRUE elapsed time from wall clock, immune to iOS tab suspension
+  const trueElapsed = Math.floor((Date.now() - state.startTime - state.pausedElapsed) / 1000);
+  const delta = trueElapsed - state.elapsed; // seconds we need to catch up
+  if (delta <= 0) return; // no tick yet
+
   const t = state.wodType;
 
-  // END COUNTDOWN (voice 10 seconds)
-  if (!state.finishAnnounced && t !== 'fortime') {
-    const remaining = state.total - state.elapsed;
-    if (remaining === 10) {
-      speak('Dieci secondi!');
-      beepTick();
-    } else if (remaining > 0 && remaining <= 3) {
-      speak(String(remaining));
-      beepTick();
-    }
-  }
+  // Process each missed second (handles wakeup after standby)
+  for (let i = 0; i < delta; i++) {
+    state.elapsed++;
+    state.phaseElapsed++;
 
-  if (t === 'amrap' || t === 'fortime') {
-    if (state.elapsed >= state.total) { finish(); return; }
-  } else if (t === 'emom') {
-    if (state.phaseElapsed >= state.workSecs) {
-      state.currentRound++;
-      state.phaseElapsed = 0;
-      if (state.currentRound > state.totalRounds) { finish(); return; }
-      beepRound();
-      speak('Round ' + state.currentRound);
-    }
-  } else if (t === 'tabata') {
-    const phaseDur = state.phase === 'work' ? state.workSecs : state.restSecs;
-    if (state.phaseElapsed >= phaseDur) {
-      if (state.phase === 'work') {
-        state.phase = 'rest';
-        state.phaseElapsed = 0;
+    // END COUNTDOWN voice cues
+    if (!state.finishAnnounced && t !== 'fortime') {
+      const remaining = state.total - state.elapsed;
+      if (remaining === 10) {
+        speak('Dieci secondi!');
         beepTick();
-        speak('Riposo');
-      } else {
+      } else if (remaining > 0 && remaining <= 3) {
+        speak(String(remaining));
+        beepTick();
+      }
+    }
+
+    if (t === 'amrap' || t === 'fortime') {
+      if (state.elapsed >= state.total) { finish(); return; }
+    } else if (t === 'emom') {
+      if (state.phaseElapsed >= state.workSecs) {
         state.currentRound++;
-        if (state.currentRound > state.totalRounds) { finish(); return; }
-        state.phase = 'work';
         state.phaseElapsed = 0;
+        if (state.currentRound > state.totalRounds) { finish(); return; }
         beepRound();
         speak('Round ' + state.currentRound);
       }
-    }
-    if (state.elapsed >= state.total) { finish(); return; }
-  } else if (t === 'custom') {
-    const cur = state.customIntervals[state.customIdx];
-    if (state.phaseElapsed >= cur.secs) {
-      state.customIdx++;
-      if (state.customIdx >= state.customIntervals.length) { finish(); return; }
-      state.phaseElapsed = 0;
-      const next = state.customIntervals[state.customIdx];
-      beepRound();
-      speak(next.name);
+    } else if (t === 'tabata') {
+      const phaseDur = state.phase === 'work' ? state.workSecs : state.restSecs;
+      if (state.phaseElapsed >= phaseDur) {
+        if (state.phase === 'work') {
+          state.phase = 'rest';
+          state.phaseElapsed = 0;
+          beepTick();
+          speak('Riposo');
+        } else {
+          state.currentRound++;
+          if (state.currentRound > state.totalRounds) { finish(); return; }
+          state.phase = 'work';
+          state.phaseElapsed = 0;
+          beepRound();
+          speak('Round ' + state.currentRound);
+        }
+      }
+      if (state.elapsed >= state.total) { finish(); return; }
+    } else if (t === 'custom') {
+      const cur = state.customIntervals[state.customIdx];
+      if (state.phaseElapsed >= cur.secs) {
+        state.customIdx++;
+        if (state.customIdx >= state.customIntervals.length) { finish(); return; }
+        state.phaseElapsed = 0;
+        const next = state.customIntervals[state.customIdx];
+        beepRound();
+        speak(next.name);
+      }
     }
   }
   updateDisplay();
@@ -1311,6 +1335,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('prModal').addEventListener('click', function(e) {
     if (e.target === this) closeModal();
   });
+});
+
+// ==============================
+// iOS STANDBY RECOVERY
+// When screen wakes up, tick() fires immediately and catches up
+// via Date.now() delta — no action needed beyond ensuring interval runs
+// ==============================
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.running) {
+    // Force an immediate tick to sync display after wakeup
+    tick();
+  }
 });
 
 // ==============================
