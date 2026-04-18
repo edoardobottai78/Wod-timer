@@ -455,6 +455,11 @@
     </div>
     <div class="interval-list" id="intervalList"></div>
     <button class="add-interval-btn" onclick="addInterval()">+ Aggiungi intervallo</button>
+    <div class="config-group" style="margin-top:14px; display:flex; align-items:center; gap:12px;">
+      <div class="config-label" style="margin-bottom:0">Rounds</div>
+      <input class="config-input" id="custom-rounds" type="number" value="1" min="1" style="width:80px;" oninput="updateCustomTotal()">
+      <div id="custom-total-label" style="font-size:12px; color:var(--steel-light); font-family:'DM Mono',monospace;"></div>
+    </div>
   </div>
 
   <!-- VOICE TOGGLE -->
@@ -661,13 +666,14 @@ function addInterval(name = '', secs = 30) {
   const div = document.createElement('div');
   div.className = 'interval-row';
   div.innerHTML = `
-    <input class="interval-name-input" placeholder="Nome" value="${name}">
+    <input class="interval-name-input" placeholder="Nome" value="${name}" oninput="updateCustomTotal()">
     <span class="config-label" style="margin:0 4px">Durata</span>
-    <input class="config-input" type="number" value="${secs}" min="1" style="width:70px;font-size:13px;">
+    <input class="config-input" type="number" value="${secs}" min="1" style="width:70px;font-size:13px;" oninput="updateCustomTotal()">
     <span class="config-label" style="margin:0">sec</span>
-    <button class="remove-btn" onclick="this.parentElement.remove()">×</button>
+    <button class="remove-btn" onclick="this.parentElement.remove(); updateCustomTotal()">×</button>
   `;
   list.appendChild(div);
+  updateCustomTotal();
 }
 
 function getCustomIntervals() {
@@ -676,6 +682,14 @@ function getCustomIntervals() {
     name: r.querySelector('.interval-name-input').value || 'Interval',
     secs: parseInt(r.querySelectorAll('input')[1].value) || 30
   }));
+}
+
+function updateCustomTotal() {
+  const ints = getCustomIntervals();
+  const rounds = parseInt(document.getElementById("custom-rounds") && document.getElementById("custom-rounds").value) || 1;
+  const totalSecs = ints.reduce((a, i) => a + i.secs, 0) * rounds;
+  const lbl = document.getElementById("custom-total-label");
+  if (lbl) lbl.textContent = totalSecs > 0 ? "Totale: " + formatMMSS(totalSecs) : "";
 }
 
 // ==============================
@@ -802,8 +816,15 @@ function buildTimer() {
     state.phaseElapsed = 0;
     state.elapsed = 0;
   } else if (t === 'custom') {
-    state.customIntervals = getCustomIntervals();
-    if (!state.customIntervals.length) { showToast('Aggiungi almeno un intervallo'); return false; }
+    const baseIntervals = getCustomIntervals();
+    if (!baseIntervals.length) { showToast('Aggiungi almeno un intervallo'); return false; }
+    const rounds = parseInt(document.getElementById('custom-rounds').value) || 1;
+    state.customRounds = rounds;
+    state.customBaseIntervals = baseIntervals;
+    state.customIntervals = [];
+    for (let r = 0; r < rounds; r++) {
+      baseIntervals.forEach(iv => state.customIntervals.push({ ...iv, round: r + 1 }));
+    }
     state.total = state.customIntervals.reduce((a, i) => a + i.secs, 0);
     state.totalRounds = state.customIntervals.length;
     state.customIdx = 0;
@@ -812,7 +833,6 @@ function buildTimer() {
     state.phase = 'custom';
     state.workSecs = state.customIntervals[0].secs;
   }
-  state.finishAnnounced = false;
   return true;
 }
 
@@ -1110,7 +1130,9 @@ function buildConfigSummary() {
   if (t === 'tabata') return 'Tabata ' + document.getElementById('tab-work').value + 's/' + document.getElementById('tab-rest').value + 's x' + document.getElementById('tab-rounds').value;
   if (t === 'custom') {
     const ints = getCustomIntervals();
-    return ints.map(i => i.name + ' ' + i.secs + 's').join(' → ');
+    const r = parseInt(document.getElementById('custom-rounds').value) || 1;
+    const base = ints.map(i => i.name + ' ' + i.secs + 's').join(' | ');
+    return r > 1 ? base + ' × ' + r + ' rounds' : base;
   }
   return '';
 }
@@ -1305,9 +1327,92 @@ function renderDiary() {
         <div class="diary-name">${e.name}</div>
         <div class="diary-details">${e.config}</div>
         ${e.score ? `<div class="diary-score">${e.score}</div>` : ''}
+        <button class="btn btn-secondary" style="font-size:11px;padding:6px 14px;margin-top:8px;" onclick="reuseFromDiary(${e.id})">↩ Riusa timer</button>
       </div>
     `;
   }).join('');
+}
+
+function reuseFromDiary(id) {
+  const diary = getDiary();
+  const e = diary.find(x => x.id === id);
+  if (!e) return;
+  // Switch to timer tab
+  switchTab('timer');
+  const t = e.type.toLowerCase().replace('for time', 'fortime').replace(' ', '');
+  // Select the WOD type button
+  document.querySelectorAll('.wod-btn').forEach(b => b.classList.remove('active'));
+  const btns = document.querySelectorAll('.wod-btn');
+  btns.forEach(b => {
+    if (b.getAttribute('onclick') && b.getAttribute('onclick').includes("'" + t + "'")) b.classList.add('active');
+  });
+  ['amrap','emom','fortime','tabata','custom'].forEach(x => {
+    document.getElementById('cfg-' + x).style.display = x === t ? '' : 'none';
+  });
+  resetTimer();
+  state.wodType = t;
+  const cfg = e.config || '';
+
+  if (t === 'amrap') {
+    // e.g. "AMRAP 20:00"
+    const m = cfg.match(/AMRAP\s+([\d:]+)/i);
+    if (m) document.getElementById('amrap-time').value = m[1];
+    const nameEl = document.getElementById('amrap-name');
+    if (nameEl) nameEl.value = e.name || '';
+
+  } else if (t === 'emom') {
+    // e.g. "EMOM 10x5min"
+    const m = cfg.match(/EMOM\s+(\d+)x(\d+)/i);
+    if (m) {
+      document.getElementById('emom-rounds').value = m[1];
+      document.getElementById('emom-min').value = m[2];
+    }
+    const nameEl = document.getElementById('emom-name');
+    if (nameEl) nameEl.value = e.name || '';
+
+  } else if (t === 'fortime') {
+    // e.g. "For Time · cap 20:00 · 3 rnd"
+    const capM = cfg.match(/cap\s+([\d:]+)/i);
+    const rndM = cfg.match(/(\d+)\s+rnd/i);
+    if (capM) document.getElementById('ft-cap').value = capM[1];
+    if (rndM) document.getElementById('ft-rounds').value = rndM[1];
+    const nameEl = document.getElementById('ft-name');
+    if (nameEl) nameEl.value = e.name || '';
+
+  } else if (t === 'tabata') {
+    // e.g. "Tabata 20s/10s x8"
+    const m = cfg.match(/Tabata\s+(\d+)s\/(\d+)s\s*x(\d+)/i);
+    if (m) {
+      document.getElementById('tab-work').value = m[1];
+      document.getElementById('tab-rest').value = m[2];
+      document.getElementById('tab-rounds').value = m[3];
+    }
+    const nameEl = document.getElementById('tab-name');
+    if (nameEl) nameEl.value = e.name || '';
+
+  } else if (t === 'custom') {
+    // e.g. "Work 40s | Rest 20s × 3 rounds"  or "Work 40s | Rest 20s"
+    initCustom();
+    // Clear existing intervals
+    document.getElementById('intervalList').innerHTML = '';
+    // Parse rounds
+    const roundsM = cfg.match(/×\s*(\d+)\s*rounds?/i);
+    const numRounds = roundsM ? parseInt(roundsM[1]) : 1;
+    document.getElementById('custom-rounds').value = numRounds;
+    // Strip the rounds part, then parse intervals
+    const basePart = cfg.replace(/×\s*\d+\s*rounds?/i, '').trim().replace(/\s*\|\s*/g, '|');
+    const parts = basePart.split('|');
+    parts.forEach(p => {
+      p = p.trim();
+      const m = p.match(/^(.+?)\s+(\d+)s$/);
+      if (m) addInterval(m[1].trim(), parseInt(m[2]));
+    });
+    updateCustomTotal();
+    const nameEl = document.getElementById('custom-name');
+    if (nameEl) nameEl.value = e.name || '';
+  }
+
+  showToast('Timer ripristinato da Diario');
 }
 
 function clearDiaryFilters() {
